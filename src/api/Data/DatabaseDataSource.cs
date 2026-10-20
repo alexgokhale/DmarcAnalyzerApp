@@ -66,7 +66,7 @@ public static class DatabaseDataSource
         if (settings.SslMode is SslMode.Disable)
         {
             throw new InvalidOperationException(
-                "Database__IamAuth required TLS, but the connection string sets sslmode to disable. " +
+                "Database__IamAuth requires TLS, but the connection string sets sslmode to disable. " +
                 "RDS only accepts IAM logins over TLS.");
         }
 
