@@ -10,25 +10,14 @@ namespace DmarcAnalyzer.Api.Data;
 /// <para>
 /// With <c>Database:IamAuth</c> on, the password is an RDS IAM authentication
 /// token instead of a stored secret. A token is only valid for 15 minutes, so a
-/// fixed connection string cannot carry one: Npgsql asks for a fresh token on a
-/// timer and uses the latest for every new physical connection.
+/// fixed connection string cannot carry one: a fresh token is generated each time
+/// Npgsql opens a physical connection. Connections already open stay open — the
+/// token is only checked at login.
 /// </para>
 /// </summary>
 public static class DatabaseDataSource
 {
     public const string IamAuthKey = "Database:IamAuth";
-
-    /// <summary>
-    /// Well inside the 15 minute token lifetime, so a connection opened just
-    /// before a refresh still logs in with a valid token.
-    /// </summary>
-    private static readonly TimeSpan TokenRefreshInterval = TimeSpan.FromMinutes(10);
-
-    /// <summary>
-    /// After a failed refresh (credentials not yet available, a throttled call),
-    /// try again soon rather than waiting out the full interval.
-    /// </summary>
-    private static readonly TimeSpan TokenRetryInterval = TimeSpan.FromSeconds(5);
 
     public static NpgsqlDataSource Create(IConfiguration configuration, string connectionString)
     {
@@ -75,15 +64,18 @@ public static class DatabaseDataSource
             settings.SslMode = SslMode.Require;
         }
 
-        // Region and credentials come from the SDK's ambient chain: the ECS task
-        // role, an instance profile, or IRSA - the same chain the S3 source uses.
-        // The token is signed for one host and port, so it is generated from the
-        // settings Npgsql passes in: with several hosts in the connection string,
-        // each host's pool gets its own settings rather than the whole list.
-        builder.UsePeriodicPasswordProvider(
-            async (hostSettings, _) => await RDSAuthTokenGenerator.GenerateAuthTokenAsync(
+        // Called as each connection opens, with the settings of the host that is
+        // being opened: the token is signed for one host and port, and with
+        // several hosts in the connection string each host's pool passes its own.
+        //
+        // Generating per connection is cheap: signing is local, and the SDK keeps
+        // the credentials from its ambient chain (the ECS task role, an instance
+        // profile, or IRSA - the same chain the S3 source uses) until they near
+        // expiry, so only a credential refresh reaches the network.
+        builder.UsePasswordProvider(
+            hostSettings => RDSAuthTokenGenerator.GenerateAuthToken(
                 hostSettings.Host!, hostSettings.Port, hostSettings.Username!),
-            TokenRefreshInterval,
-            TokenRetryInterval);
+            async (hostSettings, _) => await RDSAuthTokenGenerator.GenerateAuthTokenAsync(
+                hostSettings.Host!, hostSettings.Port, hostSettings.Username!));
     }
 }
