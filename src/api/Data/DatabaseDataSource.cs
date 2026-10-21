@@ -75,14 +75,14 @@ public static class DatabaseDataSource
             settings.SslMode = SslMode.Require;
         }
 
-        var host = settings.Host;
-        var port = settings.Port;
-        var username = settings.Username;
-
         // Region and credentials come from the SDK's ambient chain: the ECS task
         // role, an instance profile, or IRSA - the same chain the S3 source uses.
+        // The token is signed for one host and port, so it is generated from the
+        // settings Npgsql passes in: with several hosts in the connection string,
+        // each host's pool gets its own settings rather than the whole list.
         builder.UsePeriodicPasswordProvider(
-            async (_, _) => await RDSAuthTokenGenerator.GenerateAuthTokenAsync(host, port, username),
+            async (hostSettings, _) => await RDSAuthTokenGenerator.GenerateAuthTokenAsync(
+                hostSettings.Host!, hostSettings.Port, hostSettings.Username!),
             TokenRefreshInterval,
             TokenRetryInterval);
     }
