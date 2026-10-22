@@ -19,6 +19,12 @@ public static class DatabaseDataSource
 {
     public const string IamAuthKey = "Database:IamAuth";
 
+    /// <summary>
+    /// The Amazon RDS CA bundle
+    /// </summary>
+    public static readonly string RdsCaBundlePath =
+        Path.Combine(AppContext.BaseDirectory, "Certificates", "rds-global-bundle.pem");
+
     public static NpgsqlDataSource Create(IConfiguration configuration, string connectionString)
     {
         var builder = new NpgsqlDataSourceBuilder(connectionString);
@@ -59,9 +65,14 @@ public static class DatabaseDataSource
                 "RDS only accepts IAM logins over TLS.");
         }
 
-        if (settings.SslMode is SslMode.Allow or SslMode.Prefer)
+        if (settings.SslMode is SslMode.Allow or SslMode.Prefer or SslMode.Require)
         {
-            settings.SslMode = SslMode.Require;
+            settings.SslMode = SslMode.VerifyFull;
+        }
+
+        if (string.IsNullOrEmpty(settings.RootCertificate))
+        {
+            settings.RootCertificate = RdsCaBundlePath;
         }
 
         // Called as each connection opens, with the settings of the host that is

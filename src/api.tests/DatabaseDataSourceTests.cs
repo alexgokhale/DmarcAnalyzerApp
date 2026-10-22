@@ -1,3 +1,4 @@
+using System.Security.Cryptography.X509Certificates;
 using DmarcAnalyzer.Api.Data;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
@@ -35,28 +36,76 @@ public sealed class DatabaseDataSourceTests
         Assert.Equal("alice", settings.Username);
     }
 
-    [Fact]
-    public void WithIamAuth_RaisesPreferToRequire()
+    [Theory]
+    [InlineData("Allow")]
+    [InlineData("Prefer")]
+    [InlineData("Require")]
+    public void WithIamAuth_RaisesUnverifiedTlsToVerifyFull(string sslMode)
     {
         using var dataSource = DatabaseDataSource.Create(
             Config(iamAuth: true),
-            "Host=db.example.com;Database=dmarc_analyzer;Username=dmarc;SSL Mode=Prefer");
-
-        var settings = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
-
-        Assert.Equal(SslMode.Require, settings.SslMode);
-    }
-
-    [Fact]
-    public void WithIamAuth_KeepsAStricterSslMode()
-    {
-        using var dataSource = DatabaseDataSource.Create(
-            Config(iamAuth: true),
-            "Host=db.example.com;Database=dmarc_analyzer;Username=dmarc;SSL Mode=VerifyFull");
+            $"Host=db.example.com;Database=dmarc_analyzer;Username=dmarc;SSL Mode={sslMode}");
 
         var settings = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
 
         Assert.Equal(SslMode.VerifyFull, settings.SslMode);
+    }
+
+    [Fact]
+    public void WithIamAuth_KeepsVerifyCa()
+    {
+        using var dataSource = DatabaseDataSource.Create(
+            Config(iamAuth: true),
+            "Host=db.example.com;Database=dmarc_analyzer;Username=dmarc;SSL Mode=VerifyCA");
+
+        var settings = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+
+        Assert.Equal(SslMode.VerifyCA, settings.SslMode);
+    }
+
+    [Fact]
+    public void WithIamAuth_VerifiesAgainstTheBundledRdsCa()
+    {
+        using var dataSource = DatabaseDataSource.Create(
+            Config(iamAuth: true),
+            "Host=db.example.com;Database=dmarc_analyzer;Username=dmarc");
+
+        var settings = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+
+        Assert.Equal(DatabaseDataSource.RdsCaBundlePath, settings.RootCertificate);
+        // The build copies the bundle next to the app; without it every IAM
+        // connection would fail verification.
+        Assert.True(File.Exists(DatabaseDataSource.RdsCaBundlePath));
+
+        var bundle = new X509Certificate2Collection();
+        bundle.ImportFromPemFile(DatabaseDataSource.RdsCaBundlePath);
+        Assert.NotEmpty(bundle);
+        Assert.All(bundle, certificate => Assert.Contains("OU=Amazon RDS", certificate.Subject));
+    }
+
+    [Fact]
+    public void WithIamAuth_KeepsTheOperatorsRootCertificate()
+    {
+        using var dataSource = DatabaseDataSource.Create(
+            Config(iamAuth: true),
+            "Host=db.example.com;Database=dmarc_analyzer;Username=dmarc;Root Certificate=/etc/ssl/own.pem");
+
+        var settings = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+
+        Assert.Equal("/etc/ssl/own.pem", settings.RootCertificate);
+    }
+
+    [Fact]
+    public void WithoutIamAuth_LeavesTheRootCertificateUnset()
+    {
+        using var dataSource = DatabaseDataSource.Create(
+            Config(),
+            "Host=db.example.com;Database=dmarc_analyzer;Username=alice;Password=s3cret");
+
+        var settings = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+
+        Assert.True(string.IsNullOrEmpty(settings.RootCertificate));
+        Assert.Equal(SslMode.Prefer, settings.SslMode);
     }
 
     [Fact]
